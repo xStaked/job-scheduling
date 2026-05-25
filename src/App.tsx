@@ -64,6 +64,7 @@ import {
   seedInitialData,
   type DbEmployee,
 } from "@/lib/db-operations";
+import { exportToExcel } from "@/lib/export-excel";
 
 /* ────────────────────────
    Tipos
@@ -378,37 +379,8 @@ export default function App() {
     });
   }
 
-  async function exportCSV() {
-    const header = [
-      "Puesto",
-      "Nombre",
-      "Unidad Fija",
-      "Unidad Relevante",
-      ...DAYS.flatMap((d) => [`${d} Turno`, `${d} Ausencia`, `${d} Novedad`, `${d} T.Adicional`]),
-    ];
-    const rows = filtered.map((e) => {
-      const base = [e.puesto, e.nombre, e.unidadFija, e.unidadRelevante];
-      const days = DAYS.flatMap((d) => {
-        const c = schedule[e.id]?.[d];
-        return [
-          c?.turno || "",
-          c?.ausencia || "",
-          c?.novedad || "",
-          c?.turnoAdicional ? "Sí" : "No",
-        ];
-      });
-      return [...base, ...days];
-    });
-    const csv = [header, ...rows]
-      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `horario_${week.replace(/\//g, "-")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function handleExport() {
+    await exportToExcel(filtered, schedule, week);
   }
 
   /* ── Datos derivados ── */
@@ -456,7 +428,7 @@ export default function App() {
       {/* ====== Header ====== */}
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight md:text-2xl">Horario de turnos</h1>
+          <h1 className="text-xl font-bold tracking-tight md:text-2xl">Horario de turnos "Supervisor ROMERO"</h1>
           <div className="flex items-center gap-2">
             <p className="text-sm text-muted-foreground">Semana {week}</p>
             {isCurrentWeek && (
@@ -509,8 +481,8 @@ export default function App() {
           <Button size="sm" onClick={openAddEmp}>
             <Plus className="size-4" /> <span className="hidden sm:inline">Empleado</span>
           </Button>
-          <Button variant="secondary" size="sm" onClick={exportCSV}>
-            <Download className="size-4" /> <span className="hidden sm:inline">Exportar CSV</span>
+          <Button variant="secondary" size="sm" onClick={handleExport}>
+            <Download className="size-4" /> <span className="hidden sm:inline">Descargar Excel</span>
           </Button>
         </div>
       </div>
