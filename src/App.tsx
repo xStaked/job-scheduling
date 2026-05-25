@@ -247,13 +247,16 @@ export default function App() {
 
   const updateCell = useCallback(
     async (empId: number, day: string, field: keyof DaySchedule, val: unknown) => {
-      setSchedule((prev) => ({
-        ...prev,
-        [empId]: {
-          ...prev[empId],
-          [day]: { ...prev[empId][day], [field]: val },
-        },
-      }));
+      setSchedule((prev) => {
+        const empSchedule = prev[empId] || makeWeekSchedule();
+        return {
+          ...prev,
+          [empId]: {
+            ...empSchedule,
+            [day]: { ...empSchedule[day], [field]: val },
+          },
+        };
+      });
       // Guardar en Turso
       try {
         const cell = schedule[empId]?.[day] || makeWeekSchedule()[day];
@@ -286,10 +289,15 @@ export default function App() {
 
   const saveNovedad = useCallback(async () => {
     if (!novedadTarget) return;
-    await updateCell(novedadTarget.empId, novedadTarget.day, "novedad", novedadText);
-    setNovedadDialogOpen(false);
-    setNovedadText("");
-    setNovedadTarget(null);
+    try {
+      await updateCell(novedadTarget.empId, novedadTarget.day, "novedad", novedadText);
+      setNovedadDialogOpen(false);
+      setNovedadText("");
+      setNovedadTarget(null);
+    } catch {
+      // El error ya se loguea en updateCell; aquí evitamos el cierre del diálogo
+      // para que el usuario pueda reintentar sin perder lo escrito.
+    }
   }, [novedadTarget, novedadText, updateCell]);
 
   /* ── Validación de formulario ── */
