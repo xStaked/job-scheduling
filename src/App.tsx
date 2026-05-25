@@ -185,6 +185,7 @@ export default function App() {
   const [novedadDialogOpen, setNovedadDialogOpen] = useState(false);
   const [novedadTarget, setNovedadTarget] = useState<{ empId: number; day: string } | null>(null);
   const [novedadText, setNovedadText] = useState("");
+  const isEditingNovedad = Boolean(novedadTarget && (schedule[novedadTarget.empId]?.[novedadTarget.day]?.novedad ?? ""));
 
   const [search, setSearch] = useState("");
   const nextId = useRef(1);
@@ -286,6 +287,18 @@ export default function App() {
     },
     [schedule]
   );
+
+  const deleteNovedad = useCallback(async () => {
+    if (!novedadTarget) return;
+    try {
+      await updateCell(novedadTarget.empId, novedadTarget.day, "novedad", "");
+      setNovedadDialogOpen(false);
+      setNovedadText("");
+      setNovedadTarget(null);
+    } catch {
+      // error ya se loguea en updateCell
+    }
+  }, [novedadTarget, updateCell]);
 
   const saveNovedad = useCallback(async () => {
     if (!novedadTarget) return;
@@ -828,7 +841,9 @@ export default function App() {
       <Dialog open={novedadDialogOpen} onOpenChange={setNovedadDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Registrar novedad</DialogTitle>
+            <DialogTitle>
+              {isEditingNovedad ? "Editar novedad" : "Registrar novedad"}
+            </DialogTitle>
             <DialogDescription>
               {novedadTarget && (
                 <>
@@ -849,7 +864,17 @@ export default function App() {
             autoFocus
           />
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {isEditingNovedad && (
+              <Button
+                variant="destructive"
+                onClick={deleteNovedad}
+                className="mr-auto"
+              >
+                <Trash2 className="size-4 mr-1" />
+                Eliminar
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setNovedadDialogOpen(false)}>
               Cancelar
             </Button>
