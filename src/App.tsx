@@ -13,6 +13,7 @@ import {
   Pencil,
   Trash2,
   Loader2,
+  CalendarDays,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -100,17 +101,44 @@ const UNIDADES_FIJAS = ["Bodega A", "Bodega B", "Oficina", "Flota 1", "Flota 2",
 /* ────────────────────────
    Helpers
    ──────────────────────── */
-function getCurrentWeekLabel(offset = 0): string {
+/* ── helpers de semana ── */
+
+/** Devuelve el martes de inicio de la semana "actual" (la que contiene hoy o la próxima si hoy es domingo/lunes) */
+function getCurrentWeekStart(): Date {
   const now = new Date();
-  now.setDate(now.getDate() + offset * 7);
-  const day = now.getDay();
-  const diffToTue = day === 0 ? -6 : 2 - day;
+  const day = now.getDay(); // 0=dom, 1=lun, 2=mar...
+  // Si es domingo(0) → martes de la próxima semana (+2)
+  // Si es lunes(1) → martes de mañana (+1)
+  // Martes-sábado → martes de esta semana
+  const offsetDays = day === 0 ? 2 : day === 1 ? 1 : 2 - day;
   const tue = new Date(now);
-  tue.setDate(now.getDate() + diffToTue);
+  tue.setDate(now.getDate() + offsetDays);
+  tue.setHours(0, 0, 0, 0);
+  return tue;
+}
+
+/** Genera label a partir de una fecha martes */
+function weekLabelFromTuesday(tue: Date): string {
   const sat = new Date(tue);
   sat.setDate(tue.getDate() + 4);
   const fmt = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}`;
   return `${fmt(tue)} – ${fmt(sat)}/${sat.getFullYear()}`;
+}
+
+/** Genera label de semana con offset relativo a la semana actual */
+function getWeekLabel(offset = 0): string {
+  const tue = getCurrentWeekStart();
+  tue.setDate(tue.getDate() + offset * 7);
+  return weekLabelFromTuesday(tue);
+}
+
+/** Genera array de semanas disponibles para el selector */
+function generateWeekOptions(count = 12): { label: string; offset: number }[] {
+  const options: { label: string; offset: number }[] = [];
+  for (let i = -count; i <= count; i++) {
+    options.push({ label: getWeekLabel(i), offset: i });
+  }
+  return options;
 }
 
 function makeWeekSchedule(): WeekSchedule {
@@ -145,7 +173,9 @@ export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [schedule, setSchedule] = useState<Record<number, WeekSchedule>>({});
   const [weekOffset, setWeekOffset] = useState(0);
-  const week = getCurrentWeekLabel(weekOffset);
+  const week = getWeekLabel(weekOffset);
+  const isCurrentWeek = weekOffset === 0;
+  const weekOptions = generateWeekOptions();
 
   const [empDialogOpen, setEmpDialogOpen] = useState(false);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
@@ -406,15 +436,55 @@ export default function App() {
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight md:text-2xl">Horario de turnos</h1>
-          <p className="text-sm text-muted-foreground">Semana {week}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-muted-foreground">Semana {week}</p>
+            {isCurrentWeek && (
+              <Badge variant="default" className="text-[10px] px-1.5 py-0 h-5">
+                Actual
+              </Badge>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => changeWeek(-1)} title="Semana anterior">
             <ChevronLeft className="size-4" />
           </Button>
+
+          <Select
+            value={String(weekOffset)}
+            onValueChange={(val) => setWeekOffset(Number(val))}
+          >
+            <SelectTrigger className="h-8 w-[200px] text-xs">
+              <CalendarDays className="size-3.5 mr-1 text-muted-foreground" />
+              <SelectValue placeholder="Seleccionar semana" />
+            </SelectTrigger>
+            <SelectContent className="max-h-64">
+              {weekOptions.map((opt) => (
+                <SelectItem
+                  key={opt.offset}
+                  value={String(opt.offset)}
+                  className="text-xs"
+                >
+                  {opt.label} {opt.offset === 0 ? "(Actual)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Button variant="outline" size="sm" onClick={() => changeWeek(1)} title="Semana siguiente">
             <ChevronRight className="size-4" />
           </Button>
+
+          {!isCurrentWeek && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setWeekOffset(0)}
+              className="text-xs"
+            >
+              Hoy
+            </Button>
+          )}
           <Button size="sm" onClick={openAddEmp}>
             <Plus className="size-4" /> <span className="hidden sm:inline">Empleado</span>
           </Button>
