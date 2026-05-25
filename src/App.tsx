@@ -145,7 +145,7 @@ function generateWeekOptions(count = 12): { label: string; offset: number }[] {
 function makeWeekSchedule(): WeekSchedule {
   const s: WeekSchedule = {};
   DAYS.forEach((d) => {
-    s[d] = { turno: "Diurno", ausencia: "", novedad: "", turnoAdicional: false };
+    s[d] = { turno: "", ausencia: "", novedad: "", turnoAdicional: false };
   });
   return s;
 }
@@ -230,7 +230,7 @@ export default function App() {
       rows.forEach((r) => {
         if (!map[r.employee_id]) map[r.employee_id] = makeWeekSchedule();
         map[r.employee_id][r.day] = {
-          turno: (r.turno as Turno) || "Diurno",
+          turno: (r.turno as Turno) || "",
           ausencia: (r.ausencia as Ausencia) || "",
           novedad: r.novedad || "",
           turnoAdicional: !!r.turno_adicional,
@@ -267,7 +267,7 @@ export default function App() {
           employee_id: empId,
           week_label: week,
           day,
-          turno: (updated.turno as string) || "Diurno",
+          turno: (updated.turno as string) || "",
           ausencia: (updated.ausencia as string) || "",
           novedad: (updated.novedad as string) || "",
           turno_adicional: updated.turnoAdicional ? 1 : 0,
@@ -608,14 +608,14 @@ export default function App() {
                   return [
                     <TableCell key={d + "t"} style={{ borderLeft: "1px solid hsl(var(--border))" }}>
                       <Select
-                        value={c?.turno || "Diurno"}
+                        value={c?.turno || ""}
                         onValueChange={(val) => updateCell(emp.id, d, "turno", val as Turno)}
                       >
                         <SelectTrigger className="h-7 w-[90px] text-xs">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
-                          {TURNOS.filter(Boolean).map((t) => (
+                        <SelectContent className="max-h-36">
+                          {TURNOS.map((t) => (
                             <SelectItem key={t} value={t} className="text-xs">
                               {t}
                             </SelectItem>
@@ -913,14 +913,14 @@ function EmployeeCard({
                   {d.slice(0, 3)}
                 </div>
                 <Select
-                  value={c?.turno || "Diurno"}
+                  value={c?.turno || ""}
                   onValueChange={(val) => onUpdateCell(d, "turno", val as Turno)}
                 >
                   <SelectTrigger className="h-7 w-full px-1 text-[10px]">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {TURNOS.filter(Boolean).map((t) => (
+                  <SelectContent className="max-h-36">
+                    {TURNOS.map((t) => (
                       <SelectItem key={t} value={t} className="text-xs">
                         {t}
                       </SelectItem>

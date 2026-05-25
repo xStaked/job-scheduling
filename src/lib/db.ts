@@ -37,7 +37,7 @@ export async function initDb() {
       employee_id INTEGER NOT NULL,
       week_label TEXT NOT NULL,
       day TEXT NOT NULL,
-      turno TEXT NOT NULL DEFAULT 'Diurno',
+      turno TEXT NOT NULL DEFAULT '',
       ausencia TEXT NOT NULL DEFAULT '',
       novedad TEXT NOT NULL DEFAULT '',
       turno_adicional INTEGER NOT NULL DEFAULT 0,
