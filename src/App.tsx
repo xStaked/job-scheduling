@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,6 +12,7 @@ import {
   Clock,
   Pencil,
   Trash2,
+  Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  CardDescription,
 } from "@/components/ui/card";
 import {
   Table,
@@ -49,6 +51,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+import { initDb } from "@/lib/db";
+import {
+  getEmployees,
+  createEmployee,
+  updateEmployee,
+  deleteEmployee,
+  getSchedulesForWeek,
+  upsertSchedule,
+  seedInitialData,
+  type DbEmployee,
+} from "@/lib/db-operations";
 
 /* ────────────────────────
    Tipos
@@ -83,12 +97,6 @@ const AUSENCIAS: Ausencia[] = ["", "Vacaciones", "Incapacidad", "Permiso", "Inas
 const PUESTOS_PREDEFINIDOS = ["Operario", "Supervisor", "Conductor", "Auxiliar", "Mecánico"];
 const UNIDADES_FIJAS = ["Bodega A", "Bodega B", "Oficina", "Flota 1", "Flota 2", "Planta"];
 
-const initialEmployees: Employee[] = [
-  { id: 1, puesto: "Operario", nombre: "Carlos Gómez", unidadFija: "Bodega A", unidadRelevante: "Zona Norte" },
-  { id: 2, puesto: "Supervisor", nombre: "María López", unidadFija: "Oficina", unidadRelevante: "General" },
-  { id: 3, puesto: "Conductor", nombre: "Andrés Ruiz", unidadFija: "Flota 1", unidadRelevante: "Ruta Sur" },
-];
-
 /* ────────────────────────
    Helpers
    ──────────────────────── */
@@ -113,26 +121,29 @@ function makeWeekSchedule(): WeekSchedule {
   return s;
 }
 
-function buildInitialSchedule(emps: Employee[]): Record<number, WeekSchedule> {
-  const s: Record<number, WeekSchedule> = {};
-  emps.forEach((e) => {
-    s[e.id] = makeWeekSchedule();
-  });
-  return s;
-}
-
 function emptyForm() {
   return { puesto: "", nombre: "", unidadFija: "", unidadRelevante: "" };
+}
+
+function dbToEmployee(e: DbEmployee): Employee {
+  return {
+    id: e.id,
+    puesto: e.puesto,
+    nombre: e.nombre,
+    unidadFija: e.unidad_fija,
+    unidadRelevante: e.unidad_relevante,
+  };
 }
 
 /* ────────────────────────
    Componente
    ──────────────────────── */
 export default function App() {
-  const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
-  const [schedule, setSchedule] = useState<Record<number, WeekSchedule>>(() =>
-    buildInitialSchedule(initialEmployees)
-  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [schedule, setSchedule] = useState<Record<number, WeekSchedule>>({});
   const [weekOffset, setWeekOffset] = useState(0);
   const week = getCurrentWeekLabel(weekOffset);
 
@@ -146,8 +157,58 @@ export default function App() {
   const [novedadText, setNovedadText] = useState("");
 
   const [search, setSearch] = useState("");
+  const nextId = useRef(1);
 
-  const nextId = useRef(employees.length + 1);
+  /* ── Carga inicial desde Turso ── */
+  useEffect(() => {
+    let cancelled = false;
+    async function boot() {
+      try {
+        await initDb();
+        await seedInitialData();
+        const dbEmps = await getEmployees();
+        if (cancelled) return;
+        setEmployees(dbEmps.map(dbToEmployee));
+        nextId.current = dbEmps.length > 0 ? Math.max(...dbEmps.map((e) => e.id)) + 1 : 1;
+        await loadWeekSchedule(week);
+        setIsLoading(false);
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : String(err));
+        setIsLoading(false);
+      }
+    }
+    boot();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Carga schedule cuando cambia la semana ── */
+  useEffect(() => {
+    if (isLoading) return;
+    loadWeekSchedule(week);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week]);
+
+  async function loadWeekSchedule(label: string) {
+    try {
+      const rows = await getSchedulesForWeek(label);
+      const map: Record<number, WeekSchedule> = {};
+      employees.forEach((e) => { map[e.id] = makeWeekSchedule(); });
+      rows.forEach((r) => {
+        if (!map[r.employee_id]) map[r.employee_id] = makeWeekSchedule();
+        map[r.employee_id][r.day] = {
+          turno: (r.turno as Turno) || "Diurno",
+          ausencia: (r.ausencia as Ausencia) || "",
+          novedad: r.novedad || "",
+          turnoAdicional: !!r.turno_adicional,
+        };
+      });
+      setSchedule(map);
+    } catch (err) {
+      console.error("Error cargando schedule:", err);
+    }
+  }
 
   /* ── Acciones ── */
   const changeWeek = useCallback((dir: number) => {
@@ -155,7 +216,7 @@ export default function App() {
   }, []);
 
   const updateCell = useCallback(
-    (empId: number, day: string, field: keyof DaySchedule, val: unknown) => {
+    async (empId: number, day: string, field: keyof DaySchedule, val: unknown) => {
       setSchedule((prev) => ({
         ...prev,
         [empId]: {
@@ -163,8 +224,24 @@ export default function App() {
           [day]: { ...prev[empId][day], [field]: val },
         },
       }));
+      // Guardar en Turso
+      try {
+        const cell = schedule[empId]?.[day] || makeWeekSchedule()[day];
+        const updated: Record<string, unknown> = { ...cell, [field]: val };
+        await upsertSchedule({
+          employee_id: empId,
+          week_label: week,
+          day,
+          turno: (updated.turno as string) || "Diurno",
+          ausencia: (updated.ausencia as string) || "",
+          novedad: (updated.novedad as string) || "",
+          turno_adicional: updated.turnoAdicional ? 1 : 0,
+        });
+      } catch (err) {
+        console.error("Error guardando celda:", err);
+      }
     },
-    []
+    [schedule, week]
   );
 
   const openNovedad = useCallback(
@@ -177,9 +254,9 @@ export default function App() {
     [schedule]
   );
 
-  const saveNovedad = useCallback(() => {
+  const saveNovedad = useCallback(async () => {
     if (!novedadTarget) return;
-    updateCell(novedadTarget.empId, novedadTarget.day, "novedad", novedadText);
+    await updateCell(novedadTarget.empId, novedadTarget.day, "novedad", novedadText);
     setNovedadDialogOpen(false);
     setNovedadText("");
     setNovedadTarget(null);
@@ -214,21 +291,34 @@ export default function App() {
     setEmpDialogOpen(true);
   }
 
-  function saveEmp() {
+  async function saveEmp() {
     if (!validateForm()) return;
     if (editEmp) {
+      await updateEmployee(editEmp.id, {
+        puesto: form.puesto,
+        nombre: form.nombre,
+        unidad_fija: form.unidadFija,
+        unidad_relevante: form.unidadRelevante,
+      });
       setEmployees((prev) => prev.map((e) => (e.id === editEmp.id ? { ...e, ...form } : e)));
     } else {
-      const id = nextId.current++;
-      const newEmp: Employee = { id, ...form };
+      const newId = await createEmployee({
+        puesto: form.puesto,
+        nombre: form.nombre,
+        unidad_fija: form.unidadFija,
+        unidad_relevante: form.unidadRelevante,
+      });
+      const newEmp: Employee = { id: newId, ...form };
       setEmployees((prev) => [...prev, newEmp]);
-      setSchedule((prev) => ({ ...prev, [id]: makeWeekSchedule() }));
+      setSchedule((prev) => ({ ...prev, [newId]: makeWeekSchedule() }));
+      nextId.current = Math.max(nextId.current, newId + 1);
     }
     setEmpDialogOpen(false);
   }
 
-  function deleteEmp(id: number) {
+  async function removeEmp(id: number) {
     if (!window.confirm("¿Eliminar este empleado permanentemente?")) return;
+    await deleteEmployee(id);
     setEmployees((prev) => prev.filter((e) => e.id !== id));
     setSchedule((prev) => {
       const s = { ...prev };
@@ -237,7 +327,7 @@ export default function App() {
     });
   }
 
-  function exportCSV() {
+  async function exportCSV() {
     const header = [
       "Puesto",
       "Nombre",
@@ -288,14 +378,34 @@ export default function App() {
     0
   );
 
+  /* ── Estados de carga / error ── */
+  if (isLoading) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 className="size-8 animate-spin text-primary" />
+        <p className="text-sm">Conectando con Turso…</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-lg font-semibold text-destructive">Error de conexión</p>
+        <p className="max-w-sm text-sm text-muted-foreground">{loadError}</p>
+        <Button onClick={() => window.location.reload()}>Reintentar</Button>
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto max-w-[1440px] p-6">
+    <div className="mx-auto max-w-[1440px] p-4 md:p-6">
       <h2 className="sr-only">Planificador de turnos semanal para supervisor</h2>
 
       {/* ====== Header ====== */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Horario de turnos</h1>
+          <h1 className="text-xl font-bold tracking-tight md:text-2xl">Horario de turnos</h1>
           <p className="text-sm text-muted-foreground">Semana {week}</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -306,65 +416,65 @@ export default function App() {
             <ChevronRight className="size-4" />
           </Button>
           <Button size="sm" onClick={openAddEmp}>
-            <Plus className="size-4" /> Empleado
+            <Plus className="size-4" /> <span className="hidden sm:inline">Empleado</span>
           </Button>
           <Button variant="secondary" size="sm" onClick={exportCSV}>
-            <Download className="size-4" /> Exportar CSV
+            <Download className="size-4" /> <span className="hidden sm:inline">Exportar CSV</span>
           </Button>
         </div>
       </div>
 
       {/* ====== Métricas ====== */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <CardTitle className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Total empleados
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3">
-              <Users className="size-5 text-primary" />
-              <span className="text-3xl font-bold">{employees.length}</span>
+            <div className="flex items-center gap-2">
+              <Users className="size-4 text-primary" />
+              <span className="text-2xl font-bold md:text-3xl">{employees.length}</span>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <CardTitle className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Presentes hoy
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="size-5 text-emerald-600" />
-              <span className="text-3xl font-bold text-emerald-600">{totalPresentes}</span>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="size-4 text-emerald-600" />
+              <span className="text-2xl font-bold text-emerald-600 md:text-3xl">{totalPresentes}</span>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <CardTitle className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Ausentes
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3">
-              <UserX className="size-5 text-destructive" />
-              <span className="text-3xl font-bold text-destructive">{totalAusentes}</span>
+            <div className="flex items-center gap-2">
+              <UserX className="size-4 text-destructive" />
+              <span className="text-2xl font-bold text-destructive md:text-3xl">{totalAusentes}</span>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <CardTitle className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Turnos adicionales
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3">
-              <Clock className="size-5 text-blue-600" />
-              <span className="text-3xl font-bold text-blue-600">{totalAdicionales}</span>
+            <div className="flex items-center gap-2">
+              <Clock className="size-4 text-blue-600" />
+              <span className="text-2xl font-bold text-blue-600 md:text-3xl">{totalAdicionales}</span>
             </div>
           </CardContent>
         </Card>
@@ -391,8 +501,8 @@ export default function App() {
         )}
       </div>
 
-      {/* ====== Tabla ====== */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      {/* ====== Vista Desktop: Tabla ====== */}
+      <div className="hidden rounded-xl border bg-card shadow-sm lg:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -511,7 +621,7 @@ export default function App() {
                       variant="ghost"
                       size="icon-sm"
                       className="text-destructive hover:text-destructive"
-                      onClick={() => deleteEmp(emp.id)}
+                      onClick={() => removeEmp(emp.id)}
                       title="Eliminar empleado"
                     >
                       <Trash2 className="size-3.5" />
@@ -529,6 +639,26 @@ export default function App() {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* ====== Vista Mobile: Cards ====== */}
+      <div className="flex flex-col gap-3 lg:hidden">
+        {filtered.map((emp) => (
+          <EmployeeCard
+            key={emp.id}
+            emp={emp}
+            schedule={schedule[emp.id] ?? makeWeekSchedule()}
+            onEdit={() => openEditEmp(emp)}
+            onDelete={() => removeEmp(emp.id)}
+            onUpdateCell={(day, field, val) => updateCell(emp.id, day, field, val)}
+            onOpenNovedad={(day) => openNovedad(emp.id, day)}
+          />
+        ))}
+        {filtered.length === 0 && (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            No hay empleados que coincidan con tu búsqueda.
+          </p>
+        )}
       </div>
 
       {/* ====== Dialog Empleado ====== */}
@@ -650,5 +780,122 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/* ────────────────────────
+   EmployeeCard (Mobile)
+   ──────────────────────── */
+function EmployeeCard({
+  emp,
+  schedule,
+  onEdit,
+  onDelete,
+  onUpdateCell,
+  onOpenNovedad,
+}: {
+  emp: Employee;
+  schedule: WeekSchedule;
+  onEdit: () => void;
+  onDelete: () => void;
+  onUpdateCell: (day: string, field: keyof DaySchedule, val: unknown) => void;
+  onOpenNovedad: (day: string) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="text-base leading-tight">{emp.nombre}</CardTitle>
+            <CardDescription className="mt-0.5 text-xs">
+              {emp.puesto} · {emp.unidadFija}
+              {emp.unidadRelevante && ` · ${emp.unidadRelevante}`}
+            </CardDescription>
+          </div>
+          <div className="flex shrink-0 gap-1">
+            <Button variant="ghost" size="icon-sm" onClick={onEdit} title="Editar">
+              <Pencil className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-destructive hover:text-destructive"
+              onClick={onDelete}
+              title="Eliminar"
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-5 gap-1">
+          {DAYS.map((d) => {
+            const c = schedule[d];
+            return (
+              <div key={d} className="flex flex-col gap-1">
+                <div className="text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {d.slice(0, 3)}
+                </div>
+                <Select
+                  value={c?.turno || "Diurno"}
+                  onValueChange={(val) => onUpdateCell(d, "turno", val as Turno)}
+                >
+                  <SelectTrigger className="h-7 w-full px-1 text-[10px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TURNOS.filter(Boolean).map((t) => (
+                      <SelectItem key={t} value={t} className="text-xs">
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={c?.ausencia || ""}
+                  onValueChange={(val) => onUpdateCell(d, "ausencia", val as Ausencia)}
+                >
+                  <SelectTrigger
+                    className="h-7 w-full px-1 text-[10px]"
+                    style={{ color: c?.ausencia ? "hsl(var(--destructive))" : undefined }}
+                  >
+                    <SelectValue placeholder="—" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUSENCIAS.map((a) => (
+                      <SelectItem key={a} value={a} className="text-xs">
+                        {a || "—"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant={c?.novedad ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 px-1 text-[10px]"
+                  onClick={() => onOpenNovedad(d)}
+                  title={c?.novedad || "Agregar novedad"}
+                >
+                  {c?.novedad ? (
+                    <span className="truncate">{c.novedad.slice(0, 8)}{c.novedad.length > 8 ? "…" : ""}</span>
+                  ) : (
+                    <Plus className="size-3" />
+                  )}
+                </Button>
+                <div className="flex justify-center py-0.5">
+                  <Checkbox
+                    checked={!!c?.turnoAdicional}
+                    onCheckedChange={(checked) =>
+                      onUpdateCell(d, "turnoAdicional", checked === true)
+                    }
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
